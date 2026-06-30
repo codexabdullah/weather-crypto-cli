@@ -1,150 +1,102 @@
 """
-Main entry point for dash-cli.
-
-Defines the top-level Click group and all sub-commands, wiring together
-the WeatherAPI and CryptoAPI modules with Rich-styled terminal output.
-
-Data sources (both fully free, no authentication required):
-  - Weather: Open-Meteo (geocoding + forecast)
-  - Crypto:  Coinbase public spot-price API
+Main CLI entry point for dash-cli.
+Defines the click commands for interacting with weather and crypto APIs.
 """
 
-import sys
-
 import click
-from rich import box
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
-from dash_cli.weather import WeatherAPI, WeatherAPIError
 from dash_cli.crypto import CryptoAPI, CryptoAPIError
+from dash_cli.weather import WeatherAPI, WeatherAPIError
 
 console = Console()
 
 
 @click.group()
 def main():
-    """dash-cli: Real-time weather and crypto data in your terminal."""
+    """A minimal, high-authority CLI tool for weather and crypto prices."""
     pass
 
 
-# ---------------------------------------------------------------------------
-# weather sub-command
-# ---------------------------------------------------------------------------
-
-
 @main.command()
-@click.option(
-    "--city",
-    required=True,
-    type=str,
-    help="City name to fetch live weather data for (e.g. 'Lahore', 'London').",
-)
+@click.argument("city")
 def weather(city: str):
-    """Fetch real-time weather for a specified city via Open-Meteo."""
-    console.print(
-        f"\n[bold cyan]⛅  Fetching live weather for[/bold cyan] "
-        f"[bold white]{city}[/bold white]...\n"
-    )
-
-    api = WeatherAPI()
-
+    """Fetch current weather and 3-day forecast for a given CITY."""
+    client = WeatherAPI()
     try:
-        data = api.get_weather(city)
-    except WeatherAPIError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        sys.exit(1)
+        with console.status(f"[bold green]Fetching weather for {city}...[/bold green]"):
+            data = client.get_weather(city)
 
-    temp = data.get("temperature")
-    humidity = data.get("humidity")
-    wind_speed = data.get("wind_speed")
-    description = (data.get("description") or "N/A").capitalize()
-    lat = data.get("latitude")
-    lon = data.get("longitude")
-
-    table = Table(box=box.SIMPLE_HEAVY, show_header=False, pad_edge=False, expand=False)
-    table.add_column("Field", style="bold dim", min_width=20)
-    table.add_column("Value", style="bold white", min_width=24)
-
-    table.add_row("🌡  Temperature", f"{temp} °C" if temp is not None else "N/A")
-    table.add_row("🌤  Condition", description)
-    table.add_row("💧  Humidity", f"{humidity}%" if humidity is not None else "N/A")
-    table.add_row(
-        "💨  Wind Speed", f"{wind_speed} km/h" if wind_speed is not None else "N/A"
-    )
-    table.add_row("🌐  Coordinates", f"{lat}°N, {lon}°E" if lat and lon else "N/A")
-
-    source_note = Text(
-        "Source: Open-Meteo · open-meteo.com · No API key required", style="dim"
-    )
-
-    console.print(
-        Panel(
-            table,
-            title=f"[bold cyan]  Weather — {data.get('city', city)}[/bold cyan]",
-            subtitle=source_note,
-            border_style="cyan",
-            padding=(1, 2),
+        # Current Weather Card
+        city_name = data["city"]
+        country_name = data["country"]
+        msg = (
+            f"\n[bold cyan]Current Weather in "
+            f"{city_name}, {country_name}[/bold cyan]"
         )
-    )
-    console.print()
+        console.print(msg)
+        console.print(f"Condition: {data['current']['condition']}")
+        temp_str = (
+            f"Temperature: [bold yellow]" f"{data['current']['temp_c']}°C[/bold yellow]"
+        )
+        console.print(temp_str)
+        console.print(f"Humidity: {data['current']['humidity']}%")
+        console.print(f"Wind Speed: {data['current']['wind_kph']} kph")
 
+        # Forecast Table
+        table = Table(title="\n3-Day Weather Forecast", title_style="bold magenta")
+        table.add_column("Date", style="cyan")
+        table.add_column("Condition", style="green")
+        table.add_column("Max Temp", style="red", justify="right")
+        table.add_column("Min Temp", style="blue", justify="right")
 
-# ---------------------------------------------------------------------------
-# crypto sub-command
-# ---------------------------------------------------------------------------
+        for day in data["forecast"]:
+            table.add_row(
+                day["date"],
+                day["condition"],
+                f"{day['max_temp_c']}°C",
+                f"{day['min_temp_c']}°C",
+            )
+
+        console.print(table)
+
+    except WeatherAPIError as err:
+        console.print(f"[bold red]Error:[/bold red] {err}")
+    except Exception:
+        console.print("[bold red]Fatal Error:[/bold red] An unexpected error occurred.")
 
 
 @main.command()
-@click.option(
-    "--symbol",
-    required=True,
-    type=str,
-    help="Cryptocurrency ticker symbol to fetch live price for (e.g. 'BTC', 'ETH', 'SOL').",
-)
+@click.argument("symbol")
 def crypto(symbol: str):
-    """Fetch real-time USD spot price for a cryptocurrency via Coinbase."""
-    symbol = symbol.upper()
-    console.print(
-        f"\n[bold green]🪙  Fetching live price for[/bold green] "
-        f"[bold white]{symbol}[/bold white]...\n"
-    )
-
-    api = CryptoAPI()
-
+    """Fetch the real-time USD spot price for a CRYPTO token."""
+    client = CryptoAPI()
     try:
-        data = api.get_price(symbol)
-    except CryptoAPIError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        sys.exit(1)
+        with console.status(
+            f"[bold green]Fetching spot price for {symbol.upper()}...[/bold green]"
+        ):
+            data = client.get_price(symbol)
 
-    price = data.get("price_usd")
-    price_str = f"${price:,.2f}" if price is not None else "N/A"
+        symbol_name = data["symbol"]
+        price = data["price_usd"]
 
-    table = Table(box=box.SIMPLE_HEAVY, show_header=False, pad_edge=False, expand=False)
-    table.add_column("Field", style="bold dim", min_width=20)
-    table.add_column("Value", style="bold white", min_width=24)
+        console.print("\n[bold magenta]Coinbase Live Spot Price[/bold magenta]")
+        if price is not None:
+            console.print(
+                f"Asset: [bold cyan]{symbol_name}[/bold cyan] -> "
+                f"Price: [bold green]${price:,.2f} USD[/bold green]"
+            )
+        else:
+            console.print(
+                f"Asset: [bold cyan]{symbol_name}[/bold cyan] -> "
+                "[bold yellow]Price Unavailable[/bold yellow]"
+            )
 
-    table.add_row("🪙  Symbol", data.get("symbol", symbol))
-    table.add_row("💵  Spot Price (USD)", price_str)
-
-    source_note = Text(
-        "Source: Coinbase Public API · api.coinbase.com · No API key required",
-        style="dim",
-    )
-
-    console.print(
-        Panel(
-            table,
-            title=f"[bold green]  Crypto — {data.get('symbol', symbol)} / USD[/bold green]",
-            subtitle=source_note,
-            border_style="green",
-            padding=(1, 2),
-        )
-    )
-    console.print()
+    except CryptoAPIError as err:
+        console.print(f"[bold red]Error:[/bold red] {err}")
+    except Exception:
+        console.print("[bold red]Fatal Error:[/bold red] An unexpected error occurred.")
 
 
 if __name__ == "__main__":

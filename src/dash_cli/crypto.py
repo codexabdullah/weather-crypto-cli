@@ -9,7 +9,6 @@ Returns live USD spot prices for any token supported by Coinbase.
 
 import requests
 
-
 # ---------------------------------------------------------------------------
 # Custom exception hierarchy
 # ---------------------------------------------------------------------------
@@ -94,7 +93,8 @@ class CryptoAPI:
                 ) from exc
             elif status_code == 429:
                 raise RateLimitError(
-                    "Coinbase rate limit exceeded. Please wait a moment before retrying."
+                    "Coinbase rate limit exceeded. "
+                    "Please wait a moment before retrying."
                 ) from exc
             else:
                 raise CryptoAPIError(
@@ -103,7 +103,7 @@ class CryptoAPI:
 
         except requests.exceptions.RequestException as exc:
             raise CryptoNetworkError(
-                f"Failed to connect to Coinbase while fetching the price for '{symbol}'. "
+                f"Failed to connect to Coinbase for '{symbol}'. "
                 "Check your internet connection and try again."
             ) from exc
 

@@ -1,52 +1,10 @@
 """
 Weather API wrapper module for dash-cli.
-
-Uses the fully free, zero-authentication Open-Meteo API ecosystem:
-  - Geocoding:  https://geocoding-api.open-meteo.com/v1/search
-  - Forecast:   https://api.open-meteo.com/v1/forecast
-
-No API key required.
+Uses WeatherAPI.com to fetch live stats and a 3-day forecast.
 """
 
+import os
 import requests
-
-
-# ---------------------------------------------------------------------------
-# WMO Weather Interpretation Code → Human-readable description
-# Reference: https://open-meteo.com/en/docs#weathervariables
-# ---------------------------------------------------------------------------
-
-WMO_CODE_MAP: dict[int, str] = {
-    0: "Clear sky",
-    1: "Mainly clear",
-    2: "Partly cloudy",
-    3: "Overcast",
-    45: "Foggy",
-    48: "Rime fog",
-    51: "Light drizzle",
-    53: "Moderate drizzle",
-    55: "Dense drizzle",
-    61: "Slight rain",
-    63: "Moderate rain",
-    65: "Heavy rain",
-    71: "Slight snowfall",
-    73: "Moderate snowfall",
-    75: "Heavy snowfall",
-    77: "Snow grains",
-    80: "Slight rain showers",
-    81: "Moderate rain showers",
-    82: "Violent rain showers",
-    85: "Slight snow showers",
-    86: "Heavy snow showers",
-    95: "Thunderstorm",
-    96: "Thunderstorm with slight hail",
-    99: "Thunderstorm with heavy hail",
-}
-
-
-# ---------------------------------------------------------------------------
-# Custom exception hierarchy
-# ---------------------------------------------------------------------------
 
 
 class WeatherAPIError(Exception):
@@ -55,170 +13,117 @@ class WeatherAPIError(Exception):
     pass
 
 
-class CityNotFoundError(WeatherAPIError):
-    """Raised when geocoding returns no results for the given city."""
+class LocationNotFoundError(WeatherAPIError):
+    """Raised when the given location/city is not found (HTTP 400 - Code 1006)."""
 
     pass
 
 
-class WeatherServiceTimeoutError(WeatherAPIError):
-    """Raised when any HTTP request to the weather stack times out."""
+class InvalidAPIKeyError(WeatherAPIError):
+    """Raised when the configured API key is invalid or expired (HTTP 401)."""
 
     pass
 
 
-class WeatherServiceConnectionError(WeatherAPIError):
-    """Raised for connection drops, DNS failures, or other network issues."""
+class WeatherNetworkError(WeatherAPIError):
+    """Raised for network drops, DNS failures, or timeouts."""
 
     pass
-
-
-# ---------------------------------------------------------------------------
-# API client
-# ---------------------------------------------------------------------------
 
 
 class WeatherAPI:
-    """
-    A lightweight client for fetching real-time weather data.
+    """Client for interacting with WeatherAPI.com endpoints."""
 
-    Strategy:
-      1. Resolve the city name to coordinates via Open-Meteo's free geocoding API.
-      2. Fetch live weather from the Open-Meteo forecast API using those coordinates.
+    BASE_URL = "http://api.weatherapi.com/v1"
+    DEFAULT_TIMEOUT = 5
 
-    No API key required. Both endpoints are fully public.
-    """
-
-    GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
-    FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-    DEFAULT_TIMEOUT = 10  # seconds
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _geocode(self, city: str) -> tuple[float, float, str]:
-        """
-        Resolve a city name to (latitude, longitude, resolved_display_name).
-
-        Args:
-            city: Free-text city name supplied by the user.
-
-        Returns:
-            Tuple of (latitude, longitude, resolved_name).
-
-        Raises:
-            CityNotFoundError:             No geocoding results returned.
-            WeatherServiceTimeoutError:    Request timed out.
-            WeatherServiceConnectionError: Network-level failure.
-        """
-        try:
-            response = requests.get(
-                self.GEOCODING_URL,
-                params={"name": city, "count": 1, "language": "en", "format": "json"},
-                timeout=self.DEFAULT_TIMEOUT,
-            )
-            response.raise_for_status()
-
-        except requests.exceptions.Timeout as exc:
-            raise WeatherServiceTimeoutError(
-                f"Geocoding request timed out while resolving '{city}'."
-            ) from exc
-
-        except requests.exceptions.RequestException as exc:
-            raise WeatherServiceConnectionError(
-                f"Failed to reach the geocoding service for '{city}'. "
-                "Check your internet connection and try again."
-            ) from exc
-
-        results = response.json().get("results", [])
-        if not results:
-            raise CityNotFoundError(
-                f"City '{city}' could not be found. Check the spelling and try again."
-            )
-
-        top = results[0]
-        parts = [top.get("name", city)]
-        if top.get("admin1"):
-            parts.append(top["admin1"])
-        if top.get("country_code"):
-            parts.append(top["country_code"])
-        resolved_name = ", ".join(parts)
-
-        return top["latitude"], top["longitude"], resolved_name
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
+    def __init__(self):
+        # Fallback to a placeholder string to avoid crashes during token validation
+        self.api_key = os.getenv("WEATHER_API_KEY", "PLACEHOLDER_KEY")
 
     def get_weather(self, city: str) -> dict:
         """
-        Fetch real-time weather data for the given city.
+        Fetch real-time weather and 3-day forecast for a city.
 
         Args:
-            city: The name of the city to fetch weather data for.
+            city: Name of the city (e.g., "Lahore", "London").
 
         Returns:
-            A dictionary with keys:
-                city        (str)          – resolved city name with region/country
-                latitude    (float)        – resolved latitude
-                longitude   (float)        – resolved longitude
-                temperature (float | None) – current temperature in °C
-                humidity    (int | None)   – relative humidity in %
-                wind_speed  (float | None) – wind speed in km/h
-                description (str)          – human-readable WMO weather condition
-
-        Raises:
-            CityNotFoundError:             City cannot be geocoded.
-            WeatherServiceTimeoutError:    Request timed out.
-            WeatherServiceConnectionError: Network-level failure.
-            WeatherAPIError:               Unexpected HTTP error from forecast API.
+            A clean parsed dictionary with current stats and forecast days.
         """
-        latitude, longitude, resolved_name = self._geocode(city)
-
+        url = f"{self.BASE_URL}/forecast.json"
         params = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",
-            "wind_speed_unit": "kmh",
-            "timezone": "auto",
+            "key": self.api_key,
+            "q": city,
+            "days": 3,
+            "aqi": "no",
+            "alerts": "no",
         }
 
         try:
-            response = requests.get(
-                self.FORECAST_URL,
-                params=params,
-                timeout=self.DEFAULT_TIMEOUT,
-            )
+            response = requests.get(url, params=params, timeout=self.DEFAULT_TIMEOUT)
             response.raise_for_status()
 
         except requests.exceptions.Timeout as exc:
-            raise WeatherServiceTimeoutError(
-                f"Forecast request timed out while fetching data for '{city}'."
+            raise WeatherNetworkError(
+                f"Request timed out while fetching weather for '{city}'."
             ) from exc
 
         except requests.exceptions.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else None
+            res = exc.response
+            status_code = res.status_code if res is not None else None
+
+            if status_code == 401:
+                raise InvalidAPIKeyError(
+                    "Invalid or expired WeatherAPI key. "
+                    "Check your environment variables."
+                ) from exc
+
+            if status_code == 400:
+                try:
+                    err_data = res.json().get("error", {})
+                    if err_data.get("code") == 1006:
+                        raise LocationNotFoundError(
+                            f"City '{city}' was not found. "
+                            "Please check the spelling."
+                        ) from exc
+                except (ValueError, AttributeError):
+                    pass
+
             raise WeatherAPIError(
-                f"Weather forecast service returned an unexpected error (HTTP {status_code})."
+                f"Weather API returned unexpected error (HTTP {status_code})."
             ) from exc
 
         except requests.exceptions.RequestException as exc:
-            raise WeatherServiceConnectionError(
-                f"Failed to reach the weather forecast service for '{city}'. "
-                "Check your internet connection and try again."
+            raise WeatherNetworkError(
+                f"Failed to connect to Weather API for '{city}'. "
+                "Check your connection."
             ) from exc
 
-        current = response.json().get("current", {})
-        weather_code = current.get("weather_code")
-        description = WMO_CODE_MAP.get(weather_code, f"Unknown (code {weather_code})")
+        data = response.json()
+        current = data.get("current", {})
+        location = data.get("location", {})
+
+        forecast_list = []
+        for day in data.get("forecast", {}).get("forecastday", []):
+            day_data = day.get("day", {})
+            forecast_list.append(
+                {
+                    "date": day.get("date"),
+                    "condition": day_data.get("condition", {}).get("text"),
+                    "max_temp_c": day_data.get("maxtemp_c"),
+                    "min_temp_c": day_data.get("mintemp_c"),
+                }
+            )
 
         return {
-            "city": resolved_name,
-            "latitude": latitude,
-            "longitude": longitude,
-            "temperature": current.get("temperature_2m"),
-            "humidity": current.get("relative_humidity_2m"),
-            "wind_speed": current.get("wind_speed_10m"),
-            "description": description,
+            "city": location.get("name"),
+            "country": location.get("country"),
+            "current": {
+                "temp_c": current.get("temp_c"),
+                "condition": current.get("condition", {}).get("text"),
+                "humidity": current.get("humidity"),
+                "wind_kph": current.get("wind_kph"),
+            },
+            "forecast": forecast_list,
         }
